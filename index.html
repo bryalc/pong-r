@@ -5,18 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Super Breakout with RL</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
     body {
       display: flex;
-      justify-content: center;
+      flex-direction: column;
       align-items: center;
-      height: 100vh;
+      min-height: 100vh;
       margin: 0;
       background-color: #f0f0f0;
     }
-    canvas {
+    canvas#gameCanvas {
       border: 2px solid black;
       background-color: #000;
+      width: 800px;
+      height: 600px;
     }
     #score {
       position: absolute;
@@ -58,6 +61,16 @@
       top: 10px;
       right: 10px;
     }
+    #charts {
+      margin-top: 20px;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+    }
+    #scoreChart, #rewardChart {
+      width: 400px !important;
+      height: 200px !important;
+    }
   </style>
 </head>
 <body>
@@ -69,342 +82,443 @@
     <button id="restartButton">Restart</button>
   </div>
   <button id="autoButton">Activate Auto</button>
+  <div id="charts">
+    <canvas id="scoreChart"></canvas>
+    <canvas id="rewardChart"></canvas>
+  </div>
   <script>
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-    const scoreElement = document.getElementById('score');
-    const gameOverElement = document.getElementById('gameOver');
-    const finalScoreElement = document.getElementById('finalScore');
-    const restartButton = document.getElementById('restartButton');
-    const autoButton = document.getElementById('autoButton');
+    document.addEventListener('DOMContentLoaded', () => {
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      const scoreElement = document.getElementById('score');
+      const gameOverElement = document.getElementById('gameOver');
+      const finalScoreElement = document.getElementById('finalScore');
+      const restartButton = document.getElementById('restartButton');
+      const autoButton = document.getElementById('autoButton');
 
-    // Game objects
-    const paddle = {
-      x: canvas.width / 2 - 50,
-      y: canvas.height - 20,
-      width: 100,
-      height: 10,
-      speed: 8,
-      dx: 0
-    };
+      // Game objects
+      const paddle = {
+        x: canvas.width / 2 - 50,
+        y: canvas.height - 20,
+        width: 100,
+        height: 10,
+        speed: 8,
+        dx: 0
+      };
 
-    const ballSpeed = 10; // Adjustable ball speed (increased from 4 to 8 for faster movement)
-    const ball = {
-      x: canvas.width / 2,
-      y: canvas.height / 2,
-      radius: 10,
-      dx: ballSpeed,
-      dy: -ballSpeed
-    };
+      const ballSpeed = 8;
+      const ball = {
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        radius: 10,
+        dx: ballSpeed,
+        dy: -ballSpeed
+      };
 
-    const brick = {
-      width: 80,
-      height: 20,
-      padding: 10,
-      offsetTop: 30,
-      offsetLeft: 30
-    };
+      const brick = {
+        width: 80,
+        height: 20,
+        padding: 10,
+        offsetTop: 30,
+        offsetLeft: 30
+      };
 
-    const brickRows = 5;
-    const brickCols = 9;
-    const bricks = [];
-    let score = 0;
-    let gameRunning = true;
-    let animationFrameId;
-    let autoMode = false;
-    let lastReward = 0;
-    let lastTime = performance.now();
-    let frameCount = 0;
+      const brickRows = 5;
+      const brickCols = 9;
+      const bricks = [];
+      let score = 0;
+      let gameRunning = true;
+      let animationFrameId;
+      let autoMode = false;
+      let lastReward = 0;
+      let lastTime = performance.now();
+      let frameCount = 0;
+      let episodeScores = [];
+      let episodeRewards = [];
+      let episodeCount = 0;
+      const maxEpisodes = 50;
 
-    // Initialize bricks
-    for (let c = 0; c < brickCols; c++) {
-      bricks[c] = [];
-      for (let r = 0; r < brickRows; r++) {
-        bricks[c][r] = { x: 0, y: 0, status: 1 };
-      }
-    }
-
-    // DQN Agent
-    class DQN {
-      constructor(stateSize, actionSize) {
-        this.stateSize = stateSize;
-        this.actionSize = actionSize;
-        this.memory = [];
-        this.memorySize = 1000;
-        this.gamma = 0.95;
-        this.epsilon = 1.0;
-        this.epsilonMin = 0.01;
-        this.epsilonDecay = 0.995;
-        this.batchSize = 32;
-        this.model = this.createModel();
-      }
-
-      createModel() {
-        const model = tf.sequential();
-        model.add(tf.layers.dense({ units: 24, activation: 'relu', inputShape: [this.stateSize] }));
-        model.add(tf.layers.dense({ units: 24, activation: 'relu' }));
-        model.add(tf.layers.dense({ units: this.actionSize, activation: 'linear' }));
-        model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
-        return model;
-      }
-
-      remember(state, action, reward, nextState, done) {
-        if (this.memory.length >= this.memorySize) {
-          this.memory.shift();
-        }
-        this.memory.push({ state, action, reward, nextState, done });
-      }
-
-      async train() {
-        if (this.memory.length < this.batchSize) return;
-
-        const batch = this.memory.sort(() => Math.random() - 0.5).slice(0, this.batchSize);
-        const states = tf.tensor2d(batch.map(exp => exp.state));
-        const nextStates = tf.tensor2d(batch.map(exp => exp.nextState));
-        const qValues = this.model.predict(states);
-        const nextQValues = this.model.predict(nextStates);
-
-        const targets = await qValues.array();
-        for (let i = 0; i < batch.length; i++) {
-          const { action, reward, done } = batch[i];
-          const target = reward + (done ? 0 : this.gamma * Math.max(...(await nextQValues.array())[i]));
-          targets[i][action] = target;
-        }
-
-        await this.model.fit(states, tf.tensor2d(targets), { epochs: 1, verbose: 0 });
-        states.dispose();
-        nextStates.dispose();
-        qValues.dispose();
-        nextQValues.dispose();
-
-        if (this.epsilon > this.epsilonMin) {
-          this.epsilon *= this.epsilonDecay;
-        }
-      }
-
-      async act(state) {
-        if (Math.random() < this.epsilon && autoMode) {
-          return Math.floor(Math.random() * this.actionSize);
-        }
-        const stateTensor = tf.tensor2d([state]);
-        const qValues = this.model.predict(stateTensor);
-        const action = tf.argMax(qValues, 1).dataSync()[0];
-        stateTensor.dispose();
-        qValues.dispose();
-        return action;
-      }
-    }
-
-    const dqnAgent = new DQN(6, 3);
-
-    // Keyboard controls
-    document.addEventListener('keydown', (e) => {
-      if (!autoMode) {
-        if (e.key === 'ArrowLeft') paddle.dx = -paddle.speed;
-        if (e.key === 'ArrowRight') paddle.dx = paddle.speed;
-      }
-    });
-
-    document.addEventListener('keyup', (e) => {
-      if (!autoMode) {
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') paddle.dx = 0;
-      }
-    });
-
-    // Auto mode toggle
-    autoButton.addEventListener('click', () => {
-      autoMode = !autoMode;
-      autoButton.textContent = autoMode ? 'Deactivate Auto' : 'Activate Auto';
-      if (!autoMode) paddle.dx = 0;
-    });
-
-    // Restart button
-    restartButton.addEventListener('click', resetGame);
-
-    function drawPaddle() {
-      ctx.beginPath();
-      ctx.rect(paddle.x, paddle.y, paddle.width, paddle.height);
-      ctx.fillStyle = '#0095DD';
-      ctx.fill();
-      ctx.closePath();
-    }
-
-    function drawBall() {
-      ctx.beginPath();
-      ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
-      ctx.fillStyle = '#FF0000';
-      ctx.fill();
-      ctx.closePath();
-    }
-
-    function drawBricks() {
+      // Initialize bricks
       for (let c = 0; c < brickCols; c++) {
+        bricks[c] = [];
         for (let r = 0; r < brickRows; r++) {
-          if (bricks[c][r].status === 1) {
-            const brickX = c * (brick.width + brick.padding) + brick.offsetLeft;
-            const brickY = r * (brick.height + brick.padding) + brick.offsetTop;
-            bricks[c][r].x = brickX;
-            bricks[c][r].y = brickY;
-            ctx.beginPath();
-            ctx.rect(brickX, brickY, brick.width, brick.height);
-            ctx.fillStyle = '#0095DD';
-            ctx.fill();
-            ctx.closePath();
+          bricks[c][r] = { x: 0, y: 0, status: 1 };
+        }
+      }
+
+      // Chart.js setup
+      const scoreChart = new Chart(document.getElementById('scoreChart'), {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Score per Episode',
+            data: [],
+            borderColor: '#00FF00',
+            backgroundColor: 'rgba(0, 255, 0, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: 'Episode', color: '#333' } },
+            y: { title: { display: true, text: 'Score', color: '#333' }, beginAtZero: true }
           }
         }
+      });
+
+      const rewardChart = new Chart(document.getElementById('rewardChart'), {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Reward per Episode',
+            data: [],
+            borderColor: '#FF00FF',
+            backgroundColor: 'rgba(255, 0, 255, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: 'Episode', color: '#333' } },
+            y: { title: { display: true, text: 'Reward', color: '#333' } }
+          }
+        }
+      });
+
+      // DQN Agent
+      class DQN {
+        constructor(stateSize, actionSize) {
+          this.stateSize = stateSize;
+          this.actionSize = actionSize;
+          this.memory = [];
+          this.memorySize = 1000;
+          this.gamma = 0.95;
+          this.epsilon = 1.0;
+          this.epsilonMin = 0.01;
+          this.epsilonDecay = 0.995;
+          this.batchSize = 32;
+          this.model = this.createModel();
+          this.totalReward = 0;
+        }
+
+        createModel() {
+          const model = tf.sequential();
+          model.add(tf.layers.dense({ units: 24, activation: 'relu', inputShape: [this.stateSize] }));
+          model.add(tf.layers.dense({ units: 24, activation: 'relu' }));
+          model.add(tf.layers.dense({ units: this.actionSize, activation: 'linear' }));
+          model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
+          return model;
+        }
+
+        remember(state, action, reward, nextState, done) {
+          if (this.memory.length >= this.memorySize) {
+            this.memory.shift();
+          }
+          this.memory.push({ state, action, reward, nextState, done });
+          this.totalReward += reward;
+        }
+
+        async train() {
+          if (this.memory.length < this.batchSize) return;
+
+          const batch = this.memory.sort(() => Math.random() - 0.5).slice(0, this.batchSize);
+          const states = tf.tensor2d(batch.map(exp => exp.state));
+          const nextStates = tf.tensor2d(batch.map(exp => exp.nextState));
+          const qValues = this.model.predict(states);
+          const nextQValues = this.model.predict(nextStates);
+
+          const targets = await qValues.array();
+          for (let i = 0; i < batch.length; i++) {
+            const { action, reward, done } = batch[i];
+            const target = reward + (done ? 0 : this.gamma * Math.max(...(await nextQValues.array())[i]));
+            targets[i][action] = target;
+          }
+
+          await this.model.fit(states, tf.tensor2d(targets), { epochs: 1, verbose: 0 });
+          states.dispose();
+          nextStates.dispose();
+          qValues.dispose();
+          nextQValues.dispose();
+
+          if (this.epsilon > this.epsilonMin) {
+            this.epsilon *= this.epsilonDecay;
+          }
+        }
+
+        async act(state) {
+          if (Math.random() < this.epsilon && autoMode) {
+            return Math.floor(Math.random() * this.actionSize);
+          }
+          const stateTensor = tf.tensor2d([state]);
+          const qValues = this.model.predict(stateTensor);
+          const action = tf.argMax(qValues, 1).dataSync()[0];
+          stateTensor.dispose();
+          qValues.dispose();
+          return action;
+        }
       }
-    }
 
-    function updateScore() {
-      scoreElement.textContent = `Score: ${score}`;
-    }
+      const dqnAgent = new DQN(6, 3);
 
-    function collisionDetection() {
-      let hitBrick = false;
-      for (let c = 0; c < brickCols; c++) {
-        for (let r = 0; r < brickRows; r++) {
-          const b = bricks[c][r];
-          if (b.status === 1) {
-            if (
-              ball.x > b.x &&
-              ball.x < b.x + brick.width &&
-              ball.y > b.y &&
-              ball.y < b.y + brick.height
-            ) {
-              ball.dy = -ball.dy;
-              b.status = 0;
-              score += 10;
-              lastReward = 5;
-              hitBrick = true;
-              updateScore();
+      // Keyboard controls
+      document.addEventListener('keydown', (e) => {
+        if (!autoMode) {
+          if (e.key === 'ArrowLeft') paddle.dx = -paddle.speed;
+          if (e.key === 'ArrowRight') paddle.dx = paddle.speed;
+        }
+      });
+
+      document.addEventListener('keyup', (e) => {
+        if (!autoMode) {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') paddle.dx = 0;
+        }
+      });
+
+      // Auto mode toggle
+      autoButton.addEventListener('click', () => {
+        autoMode = !autoMode;
+        autoButton.textContent = autoMode ? 'Deactivate Auto' : 'Activate Auto';
+        if (!autoMode) paddle.dx = 0;
+      });
+
+      // Restart button
+      restartButton.addEventListener('click', resetGame);
+
+      function drawPaddle() {
+        ctx.beginPath();
+        ctx.rect(paddle.x, paddle.y, paddle.width, paddle.height);
+        ctx.fillStyle = '#0095DD';
+        ctx.fill();
+        ctx.closePath();
+      }
+
+      function drawBall() {
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#FF0000';
+        ctx.fill();
+        ctx.closePath();
+      }
+
+      function drawBricks() {
+        for (let c = 0; c < brickCols; c++) {
+          for (let r = 0; r < brickRows; r++) {
+            if (bricks[c][r].status === 1) {
+              const brickX = c * (brick.width + brick.padding) + brick.offsetLeft;
+              const brickY = r * (brick.height + brick.padding) + brick.offsetTop;
+              bricks[c][r].x = brickX;
+              bricks[c][r].y = brickY;
+              ctx.beginPath();
+              ctx.rect(brickX, brickY, brick.width, brick.height);
+              ctx.fillStyle = '#0095DD';
+              ctx.fill();
+              ctx.closePath();
             }
           }
         }
       }
-      if (!hitBrick) lastReward = 0;
-    }
 
-    async function movePaddle(deltaTime) {
-      if (autoMode) {
-        const state = getGameState();
-        const action = await dqnAgent.act(state);
-        paddle.dx = (action - 1) * paddle.speed;
+      function updateScore() {
+        scoreElement.textContent = `Score: ${score}`;
       }
-      paddle.x += paddle.dx * deltaTime * 60;
-      if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
-      if (paddle.x < 0) paddle.x = 0;
-    }
 
-    async function moveBall(deltaTime) {
-      ball.x += ball.dx * deltaTime * 60;
-      ball.y += ball.dy * deltaTime * 60;
+      function updateCharts() {
+        console.log('Updating charts:', { episodeCount, score, totalReward: dqnAgent.totalReward });
+        const labels = episodeScores.map((_, i) => (i + 1).toString());
+        if (labels.length > maxEpisodes) {
+          labels.shift();
+          episodeScores.shift();
+          episodeRewards.shift();
+        }
+        scoreChart.data.labels = labels;
+        scoreChart.data.datasets[0].data = episodeScores;
+        rewardChart.data.labels = labels;
+        rewardChart.data.datasets[0].data = episodeRewards;
+        scoreChart.update();
+        rewardChart.update();
+      }
 
-      // Wall collisions
-      if (ball.x + ball.radius > canvas.width || ball.x - ball.radius < 0) {
-        ball.dx = -ball.dx;
+      function collisionDetection() {
+        let hitBrick = false;
+        for (let c = 0; c < brickCols; c++) {
+          for (let r = 0; r < brickRows; r++) {
+            const b = bricks[c][r];
+            if (b.status === 1) {
+              if (
+                ball.x > b.x &&
+                ball.x < b.x + brick.width &&
+                ball.y > b.y &&
+                ball.y < b.y + brick.height
+              ) {
+                ball.dy = -ball.dy;
+                b.status = 0;
+                score += 10;
+                lastReward = 5;
+                hitBrick = true;
+                updateScore();
+              }
+            }
+          }
+        }
+        if (!hitBrick) lastReward = 0;
       }
-      if (ball.y - ball.radius < 0) {
-        ball.dy = -ball.dy;
+
+      async function movePaddle(deltaTime) {
+        if (autoMode) {
+          const state = getGameState();
+          const action = await dqnAgent.act(state);
+          paddle.dx = (action - 1) * paddle.speed;
+        }
+        paddle.x += paddle.dx * deltaTime * 60;
+        if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
+        if (paddle.x < 0) paddle.x = 0;
       }
-      if (ball.y + ball.radius > canvas.height) {
-        lastReward = -10;
+
+      async function moveBall(deltaTime) {
+        const oldX = ball.x;
+        const oldY = ball.y;
+        const deltaX = ball.dx * deltaTime * 60;
+        const deltaY = ball.dy * deltaTime * 60;
+        let newX = oldX + deltaX;
+        let newY = oldY + deltaY;
+
+        // Wall collisions with continuous detection
+        if (newX + ball.radius > canvas.width) {
+          const timeToHit = (canvas.width - ball.radius - oldX) / deltaX;
+          newX = canvas.width - ball.radius;
+          newY = oldY + deltaY * timeToHit;
+          ball.dx = -ball.dx;
+        } else if (newX - ball.radius < 0) {
+          const timeToHit = (ball.radius - oldX) / deltaX;
+          newX = ball.radius;
+          newY = oldY + deltaY * timeToHit;
+          ball.dx = -ball.dx;
+        }
+
+        if (newY - ball.radius < 0) {
+          const timeToHit = (ball.radius - oldY) / deltaY;
+          newY = ball.radius;
+          newX = oldX + deltaX * timeToHit;
+          ball.dy = -ball.dy;
+        } else if (newY + ball.radius > canvas.height) {
+          lastReward = -10;
+          console.log('Game over - Episode:', episodeCount + 1, 'Score:', score, 'Total Reward:', dqnAgent.totalReward);
+          episodeScores.push(score);
+          episodeRewards.push(dqnAgent.totalReward);
+          episodeCount++;
+          updateCharts();
+          if (autoMode) {
+            const state = getGameState();
+            const action = (paddle.dx / paddle.speed) + 1;
+            const nextState = getGameState();
+            dqnAgent.remember(state, action, lastReward, nextState, true);
+            await dqnAgent.train();
+            setTimeout(() => {
+              resetGame();
+              if (gameRunning) draw();
+            }, 200);
+          }
+          gameRunning = false;
+          cancelAnimationFrame(animationFrameId);
+          gameOverElement.style.display = 'flex';
+          finalScoreElement.textContent = `Final Score: ${score}`;
+          return;
+        }
+
+        // Paddle collision
+        if (
+          newY + ball.radius > paddle.y &&
+          newX > paddle.x &&
+          newX < paddle.x + paddle.width
+        ) {
+          const timeToHit = (paddle.y - ball.radius - oldY) / deltaY;
+          newY = paddle.y - ball.radius;
+          newX = oldX + deltaX * timeToHit;
+          ball.dy = -ball.dy;
+          lastReward = 0;
+        }
+
+        ball.x = newX;
+        ball.y = newY;
+      }
+
+      function resetGame() {
+        paddle.x = canvas.width / 2 - 50;
+        ball.x = canvas.width / 2;
+        ball.y = canvas.height / 2;
+        ball.dx = ballSpeed;
+        ball.dy = -ballSpeed;
+        score = 0;
+        gameRunning = true;
+        gameOverElement.style.display = 'none';
+        updateScore();
+        lastReward = 0;
+        dqnAgent.totalReward = 0;
+        lastTime = performance.now();
+        for (let c = 0; c < brickCols; c++) {
+          for (let r = 0; r < brickRows; r++) {
+            bricks[c][r].status = 1;
+          }
+        }
+      }
+
+      function getGameState() {
+        const brickCount = bricks.reduce((count, col) => count + col.reduce((sum, b) => sum + b.status, 0), 0);
+        return [
+          ball.x / canvas.width,
+          ball.y / canvas.height,
+          ball.dx / ballSpeed,
+          ball.dy / ballSpeed,
+          paddle.x / canvas.width,
+          brickCount / (brickRows * brickCols)
+        ];
+      }
+
+      async function draw() {
+        if (!gameRunning) return;
+
+        const currentTime = performance.now();
+        const deltaTime = (currentTime - lastTime) / 1000;
+        lastTime = currentTime;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawPaddle();
+        drawBall();
+        drawBricks();
+        collisionDetection();
+
+        // RL training step
         if (autoMode) {
           const state = getGameState();
           const action = (paddle.dx / paddle.speed) + 1;
+          await movePaddle(deltaTime);
+          await moveBall(deltaTime);
           const nextState = getGameState();
-          dqnAgent.remember(state, action, lastReward, nextState, true);
-          await dqnAgent.train();
-          setTimeout(() => {
-            resetGame();
-            if (gameRunning) draw();
-          }, 200);
+          const done = !gameRunning;
+          dqnAgent.remember(state, action, lastReward, nextState, done);
+          if (frameCount % 10 === 0) {
+            await dqnAgent.train();
+          }
+        } else {
+          await movePaddle(deltaTime);
+          await moveBall(deltaTime);
         }
-        gameRunning = false;
-        cancelAnimationFrame(animationFrameId);
-        gameOverElement.style.display = 'flex';
-        finalScoreElement.textContent = `Final Score: ${score}`;
+
+        frameCount++;
+        animationFrameId = requestAnimationFrame(draw);
       }
 
-      // Paddle collision
-      if (
-        ball.y + ball.radius > paddle.y &&
-        ball.x > paddle.x &&
-        ball.x < paddle.x + paddle.width
-      ) {
-        ball.dy = -ball.dy;
-        lastReward = 0;
-      }
-    }
-
-    function resetGame() {
-      paddle.x = canvas.width / 2 - 50;
-      ball.x = canvas.width / 2;
-      ball.y = canvas.height / 2;
-      ball.dx = ballSpeed;
-      ball.dy = -ballSpeed;
-      score = 0;
-      gameRunning = true;
-      gameOverElement.style.display = 'none';
-      updateScore();
-      lastReward = 0;
-      lastTime = performance.now();
-
-      // Reset bricks
-      for (let c = 0; c < brickCols; c++) {
-        for (let r = 0; r < brickRows; r++) {
-          bricks[c][r].status = 1;
-        }
-      }
-    }
-
-    function getGameState() {
-      const brickCount = bricks.reduce((count, col) => count + col.reduce((sum, b) => sum + b.status, 0), 0);
-      return [
-        ball.x / canvas.width,
-        ball.y / canvas.height,
-        ball.dx / ballSpeed, // Normalize by ballSpeed
-        ball.dy / ballSpeed, // Normalize by ballSpeed
-        paddle.x / canvas.width,
-        brickCount / (brickRows * brickCols)
-      ];
-    }
-
-    async function draw() {
-      if (!gameRunning) return;
-
-      const currentTime = performance.now();
-      const deltaTime = (currentTime - lastTime) / 1000;
-      lastTime = currentTime;
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawPaddle();
-      drawBall();
-      drawBricks();
-      collisionDetection();
-
-      // RL training step
-      if (autoMode) {
-        const state = getGameState();
-        const action = (paddle.dx / paddle.speed) + 1;
-        await movePaddle(deltaTime);
-        await moveBall(deltaTime);
-        const nextState = getGameState();
-        const done = !gameRunning;
-        dqnAgent.remember(state, action, lastReward, nextState, done);
-        if (frameCount % 10 === 0) {
-          await dqnAgent.train();
-        }
-      } else {
-        await movePaddle(deltaTime);
-        await moveBall(deltaTime);
-      }
-
-      frameCount++;
-      animationFrameId = requestAnimationFrame(draw);
-    }
-
-    // Start game
-    draw();
+      // Start game
+      draw();
+    });
   </script>
 </body>
 </html>
