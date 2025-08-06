@@ -9,11 +9,20 @@
   <style>
     body {
       display: flex;
-      flex-direction: column;
-      align-items: center;
+      flex-direction: row;
+      justify-content: center;
+      align-items: flex-start;
       min-height: 100vh;
       margin: 0;
       background-color: #f0f0f0;
+      gap: 20px;
+      padding: 20px;
+    }
+    #gameContainer {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
     canvas#gameCanvas {
       border: 2px solid black;
@@ -62,9 +71,8 @@
       right: 10px;
     }
     #charts {
-      margin-top: 20px;
       display: flex;
-      justify-content: center;
+      flex-direction: column;
       gap: 20px;
     }
     #scoreChart, #rewardChart {
@@ -74,14 +82,16 @@
   </style>
 </head>
 <body>
-  <div id="score">Score: 0</div>
-  <canvas id="gameCanvas" width="800" height="600"></canvas>
-  <div id="gameOver">
-    <div>Game Over</div>
-    <div id="finalScore"></div>
-    <button id="restartButton">Restart</button>
+  <div id="gameContainer">
+    <div id="score">Score: 0</div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="gameOver">
+      <div>Game Over</div>
+      <div id="finalScore"></div>
+      <button id="restartButton">Restart</button>
+    </div>
+    <button id="autoButton">Activate Auto</button>
   </div>
-  <button id="autoButton">Activate Auto</button>
   <div id="charts">
     <canvas id="scoreChart"></canvas>
     <canvas id="rewardChart"></canvas>
