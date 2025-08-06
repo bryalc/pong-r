@@ -76,8 +76,8 @@
       gap: 20px;
     }
     #scoreChart, #rewardChart {
-      width: 400px !important;
-      height: 200px !important;
+      width: 550px !important;
+      height: 300px !important;
     }
   </style>
 </head>
@@ -172,7 +172,6 @@
         },
         options: {
           responsive: true,
-          maintainAspectRatio: false,
           scales: {
             x: { title: { display: true, text: 'Episode', color: '#333' } },
             y: { title: { display: true, text: 'Score', color: '#333' }, beginAtZero: true }
@@ -195,7 +194,6 @@
         },
         options: {
           responsive: true,
-          maintainAspectRatio: false,
           scales: {
             x: { title: { display: true, text: 'Episode', color: '#333' } },
             y: { title: { display: true, text: 'Reward', color: '#333' } }
@@ -378,7 +376,6 @@
             }
           }
         }
-        if (!hitBrick) lastReward = 0;
       }
 
       async function movePaddle(deltaTime) {
@@ -386,6 +383,10 @@
           const state = getGameState();
           const action = await dqnAgent.act(state);
           paddle.dx = (action - 1) * paddle.speed;
+          // Reward for moving in the direction of the ball
+          if (paddle.dx !== 0 && Math.sign(paddle.dx) === Math.sign(ball.dx)) {
+            lastReward = 2;
+          }
         }
         paddle.x += paddle.dx * deltaTime * 60;
         if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
@@ -453,7 +454,7 @@
           newY = paddle.y - ball.radius;
           newX = oldX + deltaX * timeToHit;
           ball.dy = -ball.dy;
-          lastReward = 0;
+          lastReward = 5;
         }
 
         ball.x = newX;
@@ -478,6 +479,10 @@
             bricks[c][r].status = 1;
           }
         }
+        // Restart the game loop
+        if (!animationFrameId) {
+          draw();
+        }
       }
 
       function getGameState() {
@@ -499,12 +504,15 @@
         const deltaTime = (currentTime - lastTime) / 1000;
         lastTime = currentTime;
 
+        // Reset reward at the start of each frame
+        lastReward = 0;
+
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         drawPaddle();
         drawBall();
         drawBricks();
         collisionDetection();
-
+        
         // RL training step
         if (autoMode) {
           const state = getGameState();
