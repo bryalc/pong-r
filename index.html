@@ -112,6 +112,8 @@
     let animationFrameId;
     let autoMode = false;
     let lastReward = 0;
+    let lastTime = performance.now();
+    let frameCount = 0;
 
     // Initialize bricks
     for (let c = 0; c < brickCols; c++) {
@@ -128,8 +130,8 @@
         this.actionSize = actionSize;
         this.memory = [];
         this.memorySize = 1000;
-        this.gamma = 0.95; // Discount factor
-        this.epsilon = 1.0; // Exploration rate
+        this.gamma = 0.95;
+        this.epsilon = 1.0;
         this.epsilonMin = 0.01;
         this.epsilonDecay = 0.995;
         this.batchSize = 32;
@@ -192,7 +194,7 @@
       }
     }
 
-    const dqnAgent = new DQN(6, 3); // 6 state inputs (ball x, y, dx, dy, paddle x, bricks), 3 actions (left, stay, right)
+    const dqnAgent = new DQN(6, 3);
 
     // Keyboard controls
     document.addEventListener('keydown', (e) => {
@@ -271,30 +273,30 @@
               ball.dy = -ball.dy;
               b.status = 0;
               score += 10;
-              lastReward = 5; // Reward for hitting a brick
+              lastReward = 5;
               hitBrick = true;
               updateScore();
             }
           }
         }
       }
-      if (!hitBrick) lastReward = 0; // No reward if no brick hit
+      if (!hitBrick) lastReward = 0;
     }
 
-    async function movePaddle() {
+    async function movePaddle(deltaTime) {
       if (autoMode) {
         const state = getGameState();
         const action = await dqnAgent.act(state);
-        paddle.dx = (action - 1) * paddle.speed; // -1: left, 0: stay, 1: right
+        paddle.dx = (action - 1) * paddle.speed;
       }
-      paddle.x += paddle.dx;
+      paddle.x += paddle.dx * deltaTime * 60;
       if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
       if (paddle.x < 0) paddle.x = 0;
     }
 
-    async function moveBall() {
-      ball.x += ball.dx;
-      ball.y += ball.dy;
+    async function moveBall(deltaTime) {
+      ball.x += ball.dx * deltaTime * 60;
+      ball.y += ball.dy * deltaTime * 60;
 
       // Wall collisions
       if (ball.x + ball.radius > canvas.width || ball.x - ball.radius < 0) {
@@ -304,26 +306,22 @@
         ball.dy = -ball.dy;
       }
       if (ball.y + ball.radius > canvas.height) {
-        lastReward = -10; // Penalty for losing ball
-        // Store experience for DQN
+        lastReward = -10;
         if (autoMode) {
           const state = getGameState();
-          const action = (paddle.dx / paddle.speed) + 1; // Convert dx to action
+          const action = (paddle.dx / paddle.speed) + 1;
           const nextState = getGameState();
           dqnAgent.remember(state, action, lastReward, nextState, true);
           await dqnAgent.train();
+          setTimeout(() => {
+            resetGame();
+            if (gameRunning) draw(); // Ensure game loop restarts
+          }, 200);
         }
-        // Game over
         gameRunning = false;
         cancelAnimationFrame(animationFrameId);
         gameOverElement.style.display = 'flex';
         finalScoreElement.textContent = `Final Score: ${score}`;
-
-        if (autoMode) {
-            setTimeout(() => {
-                resetGame()
-            }, 200);
-        }
       }
 
       // Paddle collision
@@ -333,7 +331,7 @@
         ball.x < paddle.x + paddle.width
       ) {
         ball.dy = -ball.dy;
-        lastReward = 2; // No reward for paddle hit (could be adjusted)
+        lastReward = 0;
       }
     }
 
@@ -345,11 +343,10 @@
       ball.dy = -4;
       score = 0;
       gameRunning = true;
-      //autoMode = false;
-      autoButton.textContent = 'Activate Auto';
       gameOverElement.style.display = 'none';
       updateScore();
       lastReward = 0;
+      lastTime = performance.now();
 
       // Reset bricks
       for (let c = 0; c < brickCols; c++) {
@@ -357,25 +354,26 @@
           bricks[c][r].status = 1;
         }
       }
-
-      // Restart game loop
-      draw();
     }
 
     function getGameState() {
       const brickCount = bricks.reduce((count, col) => count + col.reduce((sum, b) => sum + b.status, 0), 0);
       return [
-        ball.x / canvas.width, // Normalize ball x
-        ball.y / canvas.height, // Normalize ball y
-        ball.dx / 10, // Normalize ball dx
-        ball.dy / 10, // Normalize ball dy
-        paddle.x / canvas.width, // Normalize paddle x
-        brickCount / (brickRows * brickCols) // Normalize remaining bricks
+        ball.x / canvas.width,
+        ball.y / canvas.height,
+        ball.dx / 10,
+        ball.dy / 10,
+        paddle.x / canvas.width,
+        brickCount / (brickRows * brickCols)
       ];
     }
 
     async function draw() {
       if (!gameRunning) return;
+
+      const currentTime = performance.now();
+      const deltaTime = (currentTime - lastTime) / 1000;
+      lastTime = currentTime;
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawPaddle();
@@ -386,18 +384,21 @@
       // RL training step
       if (autoMode) {
         const state = getGameState();
-        const action = (paddle.dx / paddle.speed) + 1; // Convert dx to action
-        await movePaddle();
-        await moveBall();
+        const action = (paddle.dx / paddle.speed) + 1;
+        await movePaddle(deltaTime);
+        await moveBall(deltaTime);
         const nextState = getGameState();
         const done = !gameRunning;
         dqnAgent.remember(state, action, lastReward, nextState, done);
-        await dqnAgent.train();
+        if (frameCount % 10 === 0) {
+          await dqnAgent.train();
+        }
       } else {
-        movePaddle();
-        await moveBall();
+        await movePaddle(deltaTime);
+        await moveBall(deltaTime);
       }
 
+      frameCount++;
       animationFrameId = requestAnimationFrame(draw);
     }
 
