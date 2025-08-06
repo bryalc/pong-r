@@ -25,15 +25,50 @@
       font-family: Arial, sans-serif;
       font-size: 20px;
     }
+    #gameOver {
+      position: absolute;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      font-family: Arial, sans-serif;
+      font-size: 48px;
+      width: 800px;
+      height: 600px;
+      text-align: center;
+    }
+    #restartButton {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 24px;
+      cursor: pointer;
+      background-color: #0095DD;
+      border: none;
+      color: white;
+      border-radius: 5px;
+    }
+    #restartButton:hover {
+      background-color: #007BB5;
+    }
   </style>
 </head>
 <body>
   <div id="score">Score: 0</div>
   <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <div id="gameOver">
+    <div>Game Over</div>
+    <div id="finalScore"></div>
+    <button id="restartButton">Restart</button>
+  </div>
   <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
     const scoreElement = document.getElementById('score');
+    const gameOverElement = document.getElementById('gameOver');
+    const finalScoreElement = document.getElementById('finalScore');
+    const restartButton = document.getElementById('restartButton');
 
     // Game objects
     const paddle = {
@@ -65,6 +100,8 @@
     const brickCols = 9;
     const bricks = [];
     let score = 0;
+    let gameRunning = true;
+    let animationFrameId;
 
     // Initialize bricks
     for (let c = 0; c < brickCols; c++) {
@@ -83,6 +120,9 @@
     document.addEventListener('keyup', (e) => {
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') paddle.dx = 0;
     });
+
+    // Restart button
+    restartButton.addEventListener('click', resetGame);
 
     function drawPaddle() {
       ctx.beginPath();
@@ -161,11 +201,11 @@
         ball.dy = -ball.dy;
       }
       if (ball.y + ball.radius > canvas.height) {
-        // Reset ball if it falls below
-        ball.x = canvas.width / 2;
-        ball.y = canvas.height / 2;
-        ball.dx = 4;
-        ball.dy = -4;
+        // Game over
+        gameRunning = false;
+        cancelAnimationFrame(animationFrameId);
+        gameOverElement.style.display = 'flex';
+        finalScoreElement.textContent = `Final Score: ${score}`;
       }
 
       // Paddle collision
@@ -178,7 +218,32 @@
       }
     }
 
+    function resetGame() {
+      // Reset game state
+      paddle.x = canvas.width / 2 - 50;
+      ball.x = canvas.width / 2;
+      ball.y = canvas.height / 2;
+      ball.dx = 4;
+      ball.dy = -4;
+      score = 0;
+      gameRunning = true;
+      gameOverElement.style.display = 'none';
+      updateScore();
+
+      // Reset bricks
+      for (let c = 0; c < brickCols; c++) {
+        for (let r = 0; r < brickRows; r++) {
+          bricks[c][r].status = 1;
+        }
+      }
+
+      // Restart game loop
+      draw();
+    }
+
     function draw() {
+      if (!gameRunning) return;
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawPaddle();
       drawBall();
@@ -186,7 +251,7 @@
       collisionDetection();
       movePaddle();
       moveBall();
-      requestAnimationFrame(draw);
+      animationFrameId = requestAnimationFrame(draw);
     }
 
     // RL state exposure (for future integration)
@@ -195,7 +260,8 @@
         ball: { x: ball.x, y: ball.y, dx: ball.dx, dy: ball.dy },
         paddle: { x: paddle.x, y: paddle.y },
         bricks: bricks.map(col => col.map(b => b.status)),
-        score: score
+        score: score,
+        gameRunning: gameRunning
       };
     }
 
