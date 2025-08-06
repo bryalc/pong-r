@@ -86,7 +86,7 @@
     <div id="score">Score: 0</div>
     <canvas id="gameCanvas" width="800" height="600"></canvas>
     <div id="gameOver">
-      <div>Game Over</div>
+      <div id="gameOverMessage">Game Over</div>
       <div id="finalScore"></div>
       <button id="restartButton">Restart</button>
     </div>
@@ -102,6 +102,7 @@
       const ctx = canvas.getContext('2d');
       const scoreElement = document.getElementById('score');
       const gameOverElement = document.getElementById('gameOver');
+      const gameOverMessage = document.getElementById('gameOverMessage');
       const finalScoreElement = document.getElementById('finalScore');
       const restartButton = document.getElementById('restartButton');
       const autoButton = document.getElementById('autoButton');
@@ -376,6 +377,33 @@
             }
           }
         }
+        // Check if all bricks are destroyed
+        const allBricksDestroyed = bricks.every(col => col.every(b => b.status === 0));
+        if (hitBrick && allBricksDestroyed) {
+          lastReward = -10;
+          console.log('All bricks destroyed - Episode:', episodeCount + 1, 'Score:', score, 'Total Reward:', dqnAgent.totalReward);
+          episodeScores.push(score);
+          episodeRewards.push(dqnAgent.totalReward);
+          episodeCount++;
+          updateCharts();
+          if (autoMode) {
+            const state = getGameState();
+            const action = (paddle.dx / paddle.speed) + 1;
+            const nextState = getGameState();
+            dqnAgent.remember(state, action, lastReward, nextState, true);
+            dqnAgent.train().then(() => {
+              setTimeout(() => {
+                resetGame();
+                if (gameRunning) draw();
+              }, 200);
+            });
+          }
+          gameRunning = false;
+          cancelAnimationFrame(animationFrameId);
+          gameOverElement.style.display = 'flex';
+          gameOverMessage.textContent = 'You Win!';
+          finalScoreElement.textContent = `Final Score: ${score}`;
+        }
       }
 
       async function movePaddle(deltaTime) {
@@ -440,6 +468,7 @@
           gameRunning = false;
           cancelAnimationFrame(animationFrameId);
           gameOverElement.style.display = 'flex';
+          gameOverMessage.textContent = 'Game Over';
           finalScoreElement.textContent = `Final Score: ${score}`;
           return;
         }
@@ -512,7 +541,7 @@
         drawBall();
         drawBricks();
         collisionDetection();
-        
+
         // RL training step
         if (autoMode) {
           const state = getGameState();
