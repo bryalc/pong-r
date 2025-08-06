@@ -39,7 +39,7 @@
       height: 600px;
       text-align: center;
     }
-    #restartButton {
+    #restartButton, #autoButton {
       margin-top: 20px;
       padding: 10px 20px;
       font-size: 24px;
@@ -49,8 +49,13 @@
       color: white;
       border-radius: 5px;
     }
-    #restartButton:hover {
+    #restartButton:hover, #autoButton:hover {
       background-color: #007BB5;
+    }
+    #autoButton {
+      position: absolute;
+      top: 10px;
+      right: 10px;
     }
   </style>
 </head>
@@ -62,6 +67,7 @@
     <div id="finalScore"></div>
     <button id="restartButton">Restart</button>
   </div>
+  <button id="autoButton">Activate Auto</button>
   <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
@@ -69,6 +75,7 @@
     const gameOverElement = document.getElementById('gameOver');
     const finalScoreElement = document.getElementById('finalScore');
     const restartButton = document.getElementById('restartButton');
+    const autoButton = document.getElementById('autoButton');
 
     // Game objects
     const paddle = {
@@ -102,6 +109,7 @@
     let score = 0;
     let gameRunning = true;
     let animationFrameId;
+    let autoMode = false;
 
     // Initialize bricks
     for (let c = 0; c < brickCols; c++) {
@@ -113,12 +121,23 @@
 
     // Keyboard controls
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowLeft') paddle.dx = -paddle.speed;
-      if (e.key === 'ArrowRight') paddle.dx = paddle.speed;
+      if (!autoMode) {
+        if (e.key === 'ArrowLeft') paddle.dx = -paddle.speed;
+        if (e.key === 'ArrowRight') paddle.dx = paddle.speed;
+      }
     });
 
     document.addEventListener('keyup', (e) => {
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') paddle.dx = 0;
+      if (!autoMode) {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') paddle.dx = 0;
+      }
+    });
+
+    // Auto mode toggle
+    autoButton.addEventListener('click', () => {
+      autoMode = !autoMode;
+      autoButton.textContent = autoMode ? 'Deactivate Auto' : 'Activate Auto';
+      if (!autoMode) paddle.dx = 0; // Stop paddle when deactivating auto
     });
 
     // Restart button
@@ -184,6 +203,13 @@
     }
 
     function movePaddle() {
+      if (autoMode) {
+        // Random action: -1 (left), 0 (stay), 1 (right)
+        if (Math.random() < 0.5) { // Adjust probability for action change
+          const actions = [-1, 0, 1];
+          paddle.dx = actions[Math.floor(Math.random() * actions.length)] * paddle.speed;
+        }
+      }
       paddle.x += paddle.dx;
       if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
       if (paddle.x < 0) paddle.x = 0;
@@ -227,6 +253,8 @@
       ball.dy = -4;
       score = 0;
       gameRunning = true;
+      autoMode = false;
+      autoButton.textContent = 'Activate Auto';
       gameOverElement.style.display = 'none';
       updateScore();
 
@@ -261,7 +289,8 @@
         paddle: { x: paddle.x, y: paddle.y },
         bricks: bricks.map(col => col.map(b => b.status)),
         score: score,
-        gameRunning: gameRunning
+        gameRunning: gameRunning,
+        autoMode: autoMode
       };
     }
 
