@@ -88,12 +88,13 @@
       dx: 0
     };
 
+    const ballSpeed = 10; // Adjustable ball speed (increased from 4 to 8 for faster movement)
     const ball = {
       x: canvas.width / 2,
       y: canvas.height / 2,
       radius: 10,
-      dx: 4,
-      dy: -4
+      dx: ballSpeed,
+      dy: -ballSpeed
     };
 
     const brick = {
@@ -315,7 +316,7 @@
           await dqnAgent.train();
           setTimeout(() => {
             resetGame();
-            if (gameRunning) draw(); // Ensure game loop restarts
+            if (gameRunning) draw();
           }, 200);
         }
         gameRunning = false;
@@ -339,8 +340,8 @@
       paddle.x = canvas.width / 2 - 50;
       ball.x = canvas.width / 2;
       ball.y = canvas.height / 2;
-      ball.dx = 4;
-      ball.dy = -4;
+      ball.dx = ballSpeed;
+      ball.dy = -ballSpeed;
       score = 0;
       gameRunning = true;
       gameOverElement.style.display = 'none';
@@ -361,8 +362,8 @@
       return [
         ball.x / canvas.width,
         ball.y / canvas.height,
-        ball.dx / 10,
-        ball.dy / 10,
+        ball.dx / ballSpeed, // Normalize by ballSpeed
+        ball.dy / ballSpeed, // Normalize by ballSpeed
         paddle.x / canvas.width,
         brickCount / (brickRows * brickCols)
       ];
