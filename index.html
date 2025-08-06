@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Super Breakout</title>
+  <title>Super Breakout with RL</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
   <style>
     body {
       display: flex;
@@ -110,6 +111,7 @@
     let gameRunning = true;
     let animationFrameId;
     let autoMode = false;
+    let lastReward = 0;
 
     // Initialize bricks
     for (let c = 0; c < brickCols; c++) {
@@ -118,6 +120,79 @@
         bricks[c][r] = { x: 0, y: 0, status: 1 };
       }
     }
+
+    // DQN Agent
+    class DQN {
+      constructor(stateSize, actionSize) {
+        this.stateSize = stateSize;
+        this.actionSize = actionSize;
+        this.memory = [];
+        this.memorySize = 1000;
+        this.gamma = 0.95; // Discount factor
+        this.epsilon = 1.0; // Exploration rate
+        this.epsilonMin = 0.01;
+        this.epsilonDecay = 0.995;
+        this.batchSize = 32;
+        this.model = this.createModel();
+      }
+
+      createModel() {
+        const model = tf.sequential();
+        model.add(tf.layers.dense({ units: 24, activation: 'relu', inputShape: [this.stateSize] }));
+        model.add(tf.layers.dense({ units: 24, activation: 'relu' }));
+        model.add(tf.layers.dense({ units: this.actionSize, activation: 'linear' }));
+        model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
+        return model;
+      }
+
+      remember(state, action, reward, nextState, done) {
+        if (this.memory.length >= this.memorySize) {
+          this.memory.shift();
+        }
+        this.memory.push({ state, action, reward, nextState, done });
+      }
+
+      async train() {
+        if (this.memory.length < this.batchSize) return;
+
+        const batch = this.memory.sort(() => Math.random() - 0.5).slice(0, this.batchSize);
+        const states = tf.tensor2d(batch.map(exp => exp.state));
+        const nextStates = tf.tensor2d(batch.map(exp => exp.nextState));
+        const qValues = this.model.predict(states);
+        const nextQValues = this.model.predict(nextStates);
+
+        const targets = await qValues.array();
+        for (let i = 0; i < batch.length; i++) {
+          const { action, reward, done } = batch[i];
+          const target = reward + (done ? 0 : this.gamma * Math.max(...(await nextQValues.array())[i]));
+          targets[i][action] = target;
+        }
+
+        await this.model.fit(states, tf.tensor2d(targets), { epochs: 1, verbose: 0 });
+        states.dispose();
+        nextStates.dispose();
+        qValues.dispose();
+        nextQValues.dispose();
+
+        if (this.epsilon > this.epsilonMin) {
+          this.epsilon *= this.epsilonDecay;
+        }
+      }
+
+      async act(state) {
+        if (Math.random() < this.epsilon && autoMode) {
+          return Math.floor(Math.random() * this.actionSize);
+        }
+        const stateTensor = tf.tensor2d([state]);
+        const qValues = this.model.predict(stateTensor);
+        const action = tf.argMax(qValues, 1).dataSync()[0];
+        stateTensor.dispose();
+        qValues.dispose();
+        return action;
+      }
+    }
+
+    const dqnAgent = new DQN(6, 3); // 6 state inputs (ball x, y, dx, dy, paddle x, bricks), 3 actions (left, stay, right)
 
     // Keyboard controls
     document.addEventListener('keydown', (e) => {
@@ -137,7 +212,7 @@
     autoButton.addEventListener('click', () => {
       autoMode = !autoMode;
       autoButton.textContent = autoMode ? 'Deactivate Auto' : 'Activate Auto';
-      if (!autoMode) paddle.dx = 0; // Stop paddle when deactivating auto
+      if (!autoMode) paddle.dx = 0;
     });
 
     // Restart button
@@ -182,6 +257,7 @@
     }
 
     function collisionDetection() {
+      let hitBrick = false;
       for (let c = 0; c < brickCols; c++) {
         for (let r = 0; r < brickRows; r++) {
           const b = bricks[c][r];
@@ -195,27 +271,28 @@
               ball.dy = -ball.dy;
               b.status = 0;
               score += 10;
+              lastReward = 5; // Reward for hitting a brick
+              hitBrick = true;
               updateScore();
             }
           }
         }
       }
+      if (!hitBrick) lastReward = 0; // No reward if no brick hit
     }
 
-    function movePaddle() {
+    async function movePaddle() {
       if (autoMode) {
-        // Random action: -1 (left), 0 (stay), 1 (right)
-        if (Math.random() < 0.5) { // Adjust probability for action change
-          const actions = [-1, 0, 1];
-          paddle.dx = actions[Math.floor(Math.random() * actions.length)] * paddle.speed;
-        }
+        const state = getGameState();
+        const action = await dqnAgent.act(state);
+        paddle.dx = (action - 1) * paddle.speed; // -1: left, 0: stay, 1: right
       }
       paddle.x += paddle.dx;
       if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
       if (paddle.x < 0) paddle.x = 0;
     }
 
-    function moveBall() {
+    async function moveBall() {
       ball.x += ball.dx;
       ball.y += ball.dy;
 
@@ -227,11 +304,26 @@
         ball.dy = -ball.dy;
       }
       if (ball.y + ball.radius > canvas.height) {
+        lastReward = -10; // Penalty for losing ball
+        // Store experience for DQN
+        if (autoMode) {
+          const state = getGameState();
+          const action = (paddle.dx / paddle.speed) + 1; // Convert dx to action
+          const nextState = getGameState();
+          dqnAgent.remember(state, action, lastReward, nextState, true);
+          await dqnAgent.train();
+        }
         // Game over
         gameRunning = false;
         cancelAnimationFrame(animationFrameId);
         gameOverElement.style.display = 'flex';
         finalScoreElement.textContent = `Final Score: ${score}`;
+
+        if (autoMode) {
+            setTimeout(() => {
+                resetGame()
+            }, 200);
+        }
       }
 
       // Paddle collision
@@ -241,11 +333,11 @@
         ball.x < paddle.x + paddle.width
       ) {
         ball.dy = -ball.dy;
+        lastReward = 2; // No reward for paddle hit (could be adjusted)
       }
     }
 
     function resetGame() {
-      // Reset game state
       paddle.x = canvas.width / 2 - 50;
       ball.x = canvas.width / 2;
       ball.y = canvas.height / 2;
@@ -253,10 +345,11 @@
       ball.dy = -4;
       score = 0;
       gameRunning = true;
-      autoMode = false;
+      //autoMode = false;
       autoButton.textContent = 'Activate Auto';
       gameOverElement.style.display = 'none';
       updateScore();
+      lastReward = 0;
 
       // Reset bricks
       for (let c = 0; c < brickCols; c++) {
@@ -269,7 +362,19 @@
       draw();
     }
 
-    function draw() {
+    function getGameState() {
+      const brickCount = bricks.reduce((count, col) => count + col.reduce((sum, b) => sum + b.status, 0), 0);
+      return [
+        ball.x / canvas.width, // Normalize ball x
+        ball.y / canvas.height, // Normalize ball y
+        ball.dx / 10, // Normalize ball dx
+        ball.dy / 10, // Normalize ball dy
+        paddle.x / canvas.width, // Normalize paddle x
+        brickCount / (brickRows * brickCols) // Normalize remaining bricks
+      ];
+    }
+
+    async function draw() {
       if (!gameRunning) return;
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -277,21 +382,23 @@
       drawBall();
       drawBricks();
       collisionDetection();
-      movePaddle();
-      moveBall();
-      animationFrameId = requestAnimationFrame(draw);
-    }
 
-    // RL state exposure (for future integration)
-    function getGameState() {
-      return {
-        ball: { x: ball.x, y: ball.y, dx: ball.dx, dy: ball.dy },
-        paddle: { x: paddle.x, y: paddle.y },
-        bricks: bricks.map(col => col.map(b => b.status)),
-        score: score,
-        gameRunning: gameRunning,
-        autoMode: autoMode
-      };
+      // RL training step
+      if (autoMode) {
+        const state = getGameState();
+        const action = (paddle.dx / paddle.speed) + 1; // Convert dx to action
+        await movePaddle();
+        await moveBall();
+        const nextState = getGameState();
+        const done = !gameRunning;
+        dqnAgent.remember(state, action, lastReward, nextState, done);
+        await dqnAgent.train();
+      } else {
+        movePaddle();
+        await moveBall();
+      }
+
+      animationFrameId = requestAnimationFrame(draw);
     }
 
     // Start game
